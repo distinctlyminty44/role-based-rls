@@ -1,50 +1,93 @@
 import Link from "next/link";
 
-import { CreatePost } from "@/app/_components/create-post";
 import { getServerAuthSession } from "@/server/auth";
 import { api } from "@/trpc/server";
+import { ManagerComponent, MemberComponent, OwnerComponent, PlatformComponent } from "@/server/auth/roles";
+import InviteForm from "./_components/InviteForm";
+import RefreshSession from "./_components/RefreshSession";
+import type { Prisma } from "@prisma/client";
+
+const OrganisationList = async () => {
+  const organisations = await api.owner.listOrganisations();
+  
+  return <div className="flex flex-col opacity-90 bg-white text-black gap-4 m-4 p-4 rounded-lg shadow-md shadow-blue-500/20">{
+    organisations.map(
+      (organisation: typeof organisations[number]) => <div key={`org-${organisation.id}`}>
+        <h1 className="text-2xl">
+          {organisation.name}
+        </h1>
+        <h2 className="text-lg">Organisation Owners</h2>
+        <div className="pl-4">{organisation.owners.map((owner) => <div className="text-sm" key={`owner-${owner.id}`}>{owner.name}</div>)}</div>
+        <InviteForm addTo={organisation.id} type="add-user" />
+        <TeamListView teams={organisation.teams} />
+        <InviteForm addTo={organisation.id} type="create-team" />
+      </div>
+    )}</div>
+}
+
+type TeamReturn = Prisma.TeamGetPayload<{
+  include: {
+    managers: true,
+    members: true,
+  }
+}>;
+
+const TeamListView = ({ teams }: { teams: TeamReturn[] }) => (
+  <>
+    <h2 className="text-lg">Teams</h2>
+    <div className="pl-4">{teams.map((team) => <div key={`team-${team.id}`}>
+      <div className="text-sm" key={`team-${team.id}`}>{team.name}</div>
+
+      <div className="pl-4">
+        <h3 className="text-sm">Managers</h3>
+        <div className="pl-4">
+          {team.managers.map((manager) => <div className="text-xs" key={`manager-${manager.id}`}>{manager.name}</div>)}
+        </div>
+        <InviteForm type="add-team-manager" addTo={team.id} />
+      </div>
+      <div className="pl-4">
+        <h3 className="text-sm">Members</h3>
+        {team.members.length > 0 && <div className="pl-4">
+          {team.members.map((member) => <div className="text-xs" key={`member-${member.id}`}>{member.name}</div>)}
+        </div>}
+        <InviteForm type="add-team-user" addTo={team.id} />
+      </div>
+      
+    </div>)}</div>
+    {/* <InviteForm addTo={organisation.id} type="create-team" /> */}
+  </>
+);
+
+const TeamList = async () => {
+  const teams = await api.manager.listTeams();
+  
+  return (
+    <div className="flex flex-col opacity-90 bg-white text-black gap-4 m-4 p-4 rounded-lg shadow-md shadow-blue-500/20">
+      <TeamListView teams={teams} />
+    </div>
+  )
+}
 
 export default async function Home() {
-  const hello = await api.post.hello({ text: "from tRPC" });
   const session = await getServerAuthSession();
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-[#2e026d] to-[#15162c] text-white">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50">
       <div className="container flex flex-col items-center justify-center gap-12 px-4 py-16 ">
-        <h1 className="text-5xl font-extrabold tracking-tight sm:text-[5rem]">
-          Create <span className="text-[hsl(280,100%,70%)]">T3</span> App
-        </h1>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:gap-8">
-          <Link
-            className="flex max-w-xs flex-col gap-4 rounded-xl bg-white/10 p-4 hover:bg-white/20"
-            href="https://create.t3.gg/en/usage/first-steps"
-            target="_blank"
-          >
-            <h3 className="text-2xl font-bold">First Steps →</h3>
-            <div className="text-lg">
-              Just the basics - Everything you need to know to set up your
-              database and authentication.
-            </div>
-          </Link>
-          <Link
-            className="flex max-w-xs flex-col gap-4 rounded-xl bg-white/10 p-4 hover:bg-white/20"
-            href="https://create.t3.gg/en/introduction"
-            target="_blank"
-          >
-            <h3 className="text-2xl font-bold">Documentation →</h3>
-            <div className="text-lg">
-              Learn more about Create T3 App, the libraries it uses, and how to
-              deploy it.
-            </div>
-          </Link>
-        </div>
         <div className="flex flex-col items-center gap-2">
-          <p className="text-2xl text-white">
-            {hello ? hello.greeting : "Loading tRPC query..."}
-          </p>
+          <PlatformComponent>
+            <InviteForm type="create-org" />
+            <OrganisationList/>
+          </PlatformComponent>
+          <OwnerComponent>
+            <OrganisationList/>
+          </OwnerComponent>
+          <ManagerComponent>
+            <TeamList/>
+          </ManagerComponent>
 
           <div className="flex flex-col items-center justify-center gap-4">
-            <p className="text-center text-2xl text-white">
+            <p className="text-center text-2xl">
               {session && <span>Logged in as {session.user?.name}</span>}
             </p>
             <Link
@@ -53,30 +96,14 @@ export default async function Home() {
             >
               {session ? "Sign out" : "Sign in"}
             </Link>
+            
+            <MemberComponent>
+              <RefreshSession />
+            </MemberComponent>
+            
           </div>
         </div>
-
-        <CrudShowcase />
       </div>
     </main>
-  );
-}
-
-async function CrudShowcase() {
-  const session = await getServerAuthSession();
-  if (!session?.user) return null;
-
-  const latestPost = await api.post.getLatest();
-
-  return (
-    <div className="w-full max-w-xs">
-      {latestPost ? (
-        <p className="truncate">Your most recent post: {latestPost.name}</p>
-      ) : (
-        <p>You have no posts yet.</p>
-      )}
-
-      <CreatePost />
-    </div>
   );
 }

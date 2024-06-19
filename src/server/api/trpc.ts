@@ -13,6 +13,49 @@ import { ZodError } from "zod";
 
 import { getServerAuthSession } from "@/server/auth";
 import { db } from "@/server/db";
+import { Prisma } from "@prisma/client";
+
+/** 
+ * Row Level Security bypass Prisma Extension
+ * Requires bypass policy to be set on database, similar to:
+ * CREATE POLICY bypass_rls_policy ON "Table Name" USING (current_setting('app.bypass_rls', TRUE)::text = 'on');
+ */
+export const bypassRLS = () => Prisma.defineExtension((prisma) =>
+    prisma.$extends({
+      query: {
+        $allModels: {
+          async $allOperations({ args, query }) {
+            const [, result] = await prisma.$transaction([
+              prisma.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`,
+              query(args),
+            ]);
+            return result;
+          },
+        },
+      },
+    })
+  );
+
+/** 
+ * Row Level Security user_id Prisma extension
+ * Requires table level security policies to be enabled
+ */
+export const useRLS = (userId: string) => Prisma.defineExtension((prisma) => 
+  prisma.$extends({
+    query: {
+      $allModels: {
+        async $allOperations({ args, query }) {
+          const [, result] = await prisma.$transaction([
+            prisma.$executeRaw`SELECT set_config('app.current_user_id', ${userId}, TRUE)`,
+            query(args),
+          ]);
+          console.log('res', result)
+          return result;
+        },
+      },
+    },
+  })
+);
 
 /**
  * 1. CONTEXT
@@ -95,14 +138,57 @@ export const publicProcedure = t.procedure;
  *
  * @see https://trpc.io/docs/procedures
  */
-export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   if (!ctx.session || !ctx.session.user) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
+
   return next({
     ctx: {
+      // uses Row Level Security
+      db: ctx.db.$extends(useRLS(ctx.session.user.id)),
       // infers the `session` as non-nullable
       session: { ...ctx.session, user: ctx.session.user },
     },
   });
+});
+
+/**
+ * Super-powered (authenticated) procedure bypassing Row Level Security controls. 
+ *
+ * Included for completeness, there should not be a reason to use this
+ */
+export const bypassProcedure = t.procedure.use(({ ctx, next }) => {
+  if (!ctx.session || !ctx.session.user || ctx.session.user.role !== "platform") {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  return next({
+    ctx: {
+      // bypasses all Row Level Security in the database
+      db: ctx.db.$extends(bypassRLS()),
+      // infers the `session` as non-nullable
+      session: { ...ctx.session, user: ctx.session.user },
+    },
+  });
+});
+
+export const platformProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if (ctx.session.user.role !== "platform") {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  return next();
+});
+
+export const ownerProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if (!["platform", "owner"].includes(ctx.session.user.role)) {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  return next();
+});
+
+export const managerProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if (!["platform", "owner", "manager"].includes(ctx.session.user.role)) {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  return next();
 });
